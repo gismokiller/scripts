@@ -195,12 +195,12 @@
                     setTimeout(() => { 
                         closeModal(); 
                         handleAction('getSession'); 
-                    }, 2000);
+                    }, 3000);
                 }
             } catch (e) { 
                 console.error("Error QR:", e); 
             }
-        }, 3000);
+        }, 20000);
     }
 
     function prepareQRUI(text) {
