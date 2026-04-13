@@ -1,4 +1,343 @@
     let qrInterval = null;
+
+    // --- 1. FUNCIÓN PARA INICIAR EL PROCESO (CREAR + SOLICITAR QR) ---
+    async function confirmStart() {
+        const val = document.getElementById('modalSessionId').value;
+        if (!val) return alert('Selecciona una sucursal');
+        
+        // Preparación visual inmediata: ocultar selectores y mostrar cargador
+        document.getElementById('modalSessionId').classList.add('hidden');
+        document.getElementById('btnIniciarSesion').classList.add('hidden');
+        
+        const qrContainer = document.getElementById('qrContainer');
+        qrContainer.classList.remove('hidden');
+        qrContainer.innerHTML = `
+            <div class="flex flex-col items-center justify-center p-4">
+                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500 mb-4"></div>
+                <p id="qrStatusText" class="text-black text-[10px] font-bold uppercase text-center">Iniciando sesión en servidor...</p>
+                <img id="qrImage" src="" alt="QR Code" class="w-48 h-48 hidden mt-2">
+            </div>
+        `;
+
+        try {
+            // Paso A: Crear la sesión en el backend (WAHA via n8n)
+            const createResponse = await fetch('./waha-api', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    "body": { 
+                        "SendAction": "createSession", 
+                        "name_session": val 
+                    }
+                })
+            });
+
+            const createData = await createResponse.json();
+            console.log("Respuesta de creación:", createData);
+
+            // Actualizar texto visual
+            const statusText = document.getElementById('qrStatusText');
+            if (statusText) statusText.innerText = "Obteniendo código QR...";
+
+            // Paso B: Iniciar bucle de solicitud de QR tras un breve delay
+            setTimeout(() => {
+                getQR(val);
+            }, 1500);
+
+        } catch (e) {
+            console.error("Error al crear sesión:", e);
+            qrContainer.innerHTML = `<div class="p-4 text-red-500 font-bold text-xs text-center">❌ Error al conectar con el servidor</div>`;
+            setTimeout(() => closeModal(), 3000);
+        }
+    }
+
+    // --- 2. FUNCIÓN PARA OBTENER Y MOSTRAR EL QR ---
+    async function getQR(sessionName) {
+        const qrContainer = document.getElementById('qrContainer');
+        
+        try {
+            const response = await fetch('./waha-api', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    "body": { "SendAction": "getQR", "name_session": sessionName }
+                })
+            });
+
+            const data = await response.json();
+            const resData = data.body || data;
+
+            // Caso: Sesión ya vinculada (Éxito total)
+            if (resData.mensaje === "La sesión ha sido creada correctamente o el tiempo para escanear tu código QR ha expirado" || resData.status === "WORKING") {
+                if (qrInterval) { clearInterval(qrInterval); qrInterval = null; }
+                qrContainer.innerHTML = `
+                    <div class="p-4 text-green-600 font-bold text-center text-sm">
+                        ✅ ¡CONECTADO!<br>
+                        <span class="text-[10px] text-zinc-500">Configurando sucursal...</span>
+                    </div>`;
+                
+                setTimeout(() => {
+                    handleAction('getSession');
+                    closeModal();
+                }, 3000);
+                return;
+            }
+
+            // Caso: Mostrar imagen Base64 del QR
+            let qrBase64 = resData.data || (Array.isArray(resData) && resData[0]?.data);
+            if (qrBase64) {
+                const qrImage = document.getElementById('qrImage');
+                if (qrImage) {
+                    qrImage.src = `data:image/png;base64,${qrBase64}`;
+                    qrImage.classList.remove('hidden');
+                    
+                    // Quitar spinner si existe
+                    const loader = qrContainer.querySelector('.animate-spin');
+                    if (loader) loader.remove();
+                    
+                    const statusText = document.getElementById('qrStatusText');
+                    if (statusText) statusText.innerText = "Escanea el código con WhatsApp";
+                }
+
+                if (!qrInterval) {
+                    qrInterval = setInterval(() => getQR(sessionName), 20000);
+                }
+            }
+        } catch (e) {
+            console.error("Error obteniendo QR:", e);
+        }
+    }
+
+    // --- 3. FUNCIÓN UNIFICADA DE ACCIÓN (BACKEND) ---
+    async function handleAction(actionName, manualName = null, extraData = null) {
+        const buttons = document.querySelectorAll('button');
+        const statusLog = document.getElementById('statusLog');
+        const mainSelect = document.getElementById('mainSelect');
+        
+        buttons.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+        statusLog.classList.remove('hidden');
+
+        const sessionName = manualName || document.getElementById('sessionName').value;
+
+        if (!sessionName && actionName !== 'getSession') {
+            alert("Selecciona una sucursal.");
+            buttons.forEach(b => { b.disabled = false; b.style.opacity = '1'; });
+            return;
+        }
+
+        statusLog.innerText = `>> ${actionName.toUpperCase()} en curso...`;
+
+        try {
+            const response = await fetch('./waha-api', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    "body": { 
+                        "SendAction": actionName, 
+                        "name_session": sessionName,
+                        "new_profile_name": actionName === 'setProfileName' ? extraData : undefined,
+                        "picture_url": actionName === 'setProfilePicture' ? extraData : undefined
+                    }
+                })
+            });
+
+            const res = await response.json();
+            const sessions = res.getSession || (Array.isArray(res) && res[0]?.getSession);
+
+            if (sessions && Array.isArray(sessions)) {
+                mainSelect.innerHTML = '<option value="">--- Seleccionar Sucursal ---</option>';
+                
+                // Creamos un set con los nombres de sesiones que YA existen en el servidor
+                const activeSessionNames = sessions.map(s => s.name_session);
+            
+                sessions.forEach(s => {
+                    const icon = s.status === 'WORKING' ? '🟢' : '🔴';
+                    const cleanName = s.name_session.replace(/_/g, ' ');
+                    mainSelect.add(new Option(`${icon} ${cleanName}`, s.name_session));
+                });
+            
+                // LLAMAMOS A LA FUNCIÓN DE FILTRADO
+                filterModalOptions(activeSessionNames);
+            
+                statusLog.innerText = `${sessions.length} sesiones encontradas.`;
+                updateConnectionIndicator();
+            } else {
+                const msg = res.body?.mensaje || res.mensaje || 'Operación completada';
+                statusLog.innerText = `>> ${msg}`;
+                if (['deleteSession', 'createSession', 'restartSession', 'deleteProfilePicture', 'setProfilePicture', 'setProfileName'].includes(actionName)) {
+                    setTimeout(() => handleAction('getSession'), 2000); 
+                }
+            }
+        } catch (e) {
+            statusLog.innerText = `>> Error de comunicación.`;
+        } finally {
+            buttons.forEach(b => { b.disabled = false; b.style.opacity = '1'; });
+        }
+    }
+
+    function filterModalOptions(activeNames) {
+        const modalSelect = document.getElementById('modalSessionId');
+        
+        // 1. Limpiar el select del modal
+        modalSelect.innerHTML = '<option value="">--- Seleccionar ---</option>';
+        
+        // 2. Filtrar: Solo mostrar sucursales cuyo 'value' NO esté en activeNames
+        const availableBranches = allBranches.filter(branch => !activeNames.includes(branch.value));
+    
+        // 3. Ordenar y rellenar el select
+        availableBranches.sort((a,b) => a.label.localeCompare(b.label)).forEach(b => {
+            modalSelect.add(new Option(b.label, b.value));
+        });
+    
+        console.log(`Sucursales filtradas: ${availableBranches.length} disponibles para crear.`);
+    }
+      
+    // --- 4. GESTIÓN DE PERFIL Y FOTOS ---
+    async function uploadProfilePicture() {
+        const sessionName = document.getElementById('sessionName').value;
+        if (!sessionName) return alert("Selecciona una sucursal.");
+
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = 'image/jpeg, image/png';
+
+        fileInput.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const statusLog = document.getElementById('statusLog');
+            statusLog.classList.remove('hidden');
+            statusLog.innerHTML = `<div class="p-2 animate-pulse text-blue-400">⏳ Subiendo imagen...</div>`;
+
+            const formData = new FormData();
+            formData.append('data0', file);
+            formData.append('name_session', sessionName);
+
+            try {
+                const response = await fetch('./upload-imagen', { method: 'POST', body: formData });
+                const result = await response.json();
+                const url = Array.isArray(result) ? result[0].secure_url : result.secure_url;
+
+                if (url) {
+                    statusLog.innerHTML = `
+                        <div class="bg-green-500/10 border border-green-500/50 p-4 rounded-2xl mt-2 space-y-3">
+                            <p class="text-green-400 font-bold text-[10px] mb-2 text-center">✅ IMAGEN LISTA</p>
+                            <input type="text" readonly value="${url}" id="urlCloudinary" class="w-full bg-black/40 p-2 rounded-xl text-[10px] outline-none text-zinc-500 mb-2">
+                            <div class="grid grid-cols-1 gap-2">
+                                <button onclick="copyUrlToClipboard()" class="w-full bg-zinc-700 text-white p-3 rounded-xl text-[10px] font-bold transition active:scale-95">📋 COPIAR LINK</button>
+                                <button onclick="handleAction('setProfilePicture', null, '${url}')" class="w-full bg-green-600 text-white p-3 rounded-xl text-[10px] font-bold transition active:scale-95">✨ APLICAR A ESTA CUENTA</button>
+                                <button onclick="changeAllProfilePictures()" class="w-full bg-blue-600 text-white p-3 rounded-xl text-[10px] font-bold transition active:scale-95">🖼️ CHANGE ALL PICS (WORKING)</button>
+                            </div>
+                        </div>`;
+                }
+            } catch (err) { 
+                statusLog.innerHTML = `<div class="p-2 text-red-400">❌ Error al subir.</div>`; 
+            }
+        };
+        fileInput.click();
+    }
+
+    async function changeAllProfilePictures() {
+        const statusLog = document.getElementById('statusLog');
+        const urlCloudinary = document.getElementById('urlCloudinary')?.value;
+        if (!urlCloudinary) return alert("Sube una foto primero.");
+        if (!confirm("¿Actualizar TODAS las sesiones WORKING?")) return;
+
+        statusLog.classList.remove('hidden');
+        try {
+            const response = await fetch('./waha-api', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ "body": { "SendAction": "getSession" } })
+            });
+            const res = await response.json();
+            const allSessions = res.getSession || (Array.isArray(res) && res[0]?.getSession) || [];
+            const activeSessions = allSessions.filter(s => s.status === 'WORKING');
+            const total = activeSessions.length;
+
+            if (total === 0) {
+                statusLog.innerHTML = `<div class="p-2 text-red-400">❌ No hay sesiones activas.</div>`;
+                return;
+            }
+
+            for (let i = 0; i < total; i++) {
+                const session = activeSessions[i];
+                statusLog.innerHTML = `
+                    <div class="bg-blue-500/10 border border-blue-500/50 p-3 rounded-xl space-y-2">
+                        <p class="text-blue-400 font-bold text-[10px]">🔄 PROCESANDO: ${i+1} de ${total}</p>
+                        <p class="text-white text-[10px]">Sucursal: ${session.name_session.replace(/_/g, ' ')}</p>
+                        <div id="countdownTimer" class="text-zinc-500 text-[9px]">Siguiente en: 5s</div>
+                    </div>`;
+
+                await handleAction('setProfilePicture', session.name_session, urlCloudinary);
+                if (i + 1 < total) {
+                    for (let s = 5; s > 0; s--) {
+                        const t = document.getElementById('countdownTimer');
+                        if (t) t.innerText = `Siguiente en: ${s}s`;
+                        await new Promise(r => setTimeout(r, 1000));
+                    }
+                }
+            }
+            statusLog.innerHTML = `<div class="p-4 bg-green-600/20 text-green-400 rounded-xl text-center font-bold">🎉 ¡TODO ACTUALIZADO!</div>`;
+        } catch (e) {
+            statusLog.innerHTML = `<div class="p-2 text-red-400">❌ Error masivo.</div>`;
+        }
+    }
+
+    // --- 5. FUNCIONES AUXILIARES Y UI ---
+    function copyUrlToClipboard() {
+        const el = document.getElementById("urlCloudinary");
+        navigator.clipboard.writeText(el.value);
+        if (window.navigator.vibrate) window.navigator.vibrate(20);
+    }
+
+    function openNameModal() {
+        if (!document.getElementById('sessionName').value) return alert("Selecciona una sucursal.");
+        document.getElementById('modalName').classList.replace('hidden', 'flex');
+        document.getElementById('newNameInput').focus();
+    }
+
+    function closeNameModal() {
+        document.getElementById('modalName').classList.replace('flex', 'hidden');
+        document.getElementById('newNameInput').value = '';
+    }
+
+    async function confirmNameChange() {
+        const newName = document.getElementById('newNameInput').value.trim();
+        if (!newName) return alert("Escribe un nombre.");
+        closeNameModal();
+        await handleAction('setProfileName', null, newName);
+    }
+
+    function updateConnectionIndicator() {
+        const sel = document.getElementById('mainSelect');
+        const indicator = document.getElementById('connectionStatus');
+        const isWorking = sel.options[sel.selectedIndex]?.text.includes('🟢');
+        indicator.className = isWorking 
+            ? "w-2.5 h-2.5 bg-green-500 rounded-full shadow-[0_0_12px_rgba(34,197,94,0.8)]" 
+            : "w-2.5 h-2.5 bg-red-500 rounded-full";
+    }
+
+    function showView(viewName) {
+        document.querySelectorAll('.view-content').forEach(v => v.classList.remove('active'));
+        document.getElementById(`view-${viewName}`).classList.add('active');
+        document.getElementById('navTitle').innerText = viewName === 'profile' ? 'GESTOR DE PERFIL' : 'EFECTIMUNDO';
+        if(viewName === 'home') document.getElementById('statusLog').classList.add('hidden');
+        window.scrollTo({top: 0, behavior: 'smooth'});
+    }
+
+    function openModal() { document.getElementById('modal').classList.replace('hidden', 'flex'); }
+
+    function closeModal() {
+        document.getElementById('modal').classList.replace('flex', 'hidden');
+        if (qrInterval) { clearInterval(qrInterval); qrInterval = null; }
+        const qrContainer = document.getElementById('qrContainer');
+        qrContainer.classList.add('hidden');
+        qrContainer.innerHTML = ''; 
+        document.getElementById('modalSessionId').classList.remove('hidden');
+        document.getElementById('btnIniciarSesion').classList.remove('hidden');
+    }
+
     // --- 6. INICIALIZACIÓN DE SUCURSALES ---
     const allBranches = [
         {value: "Efectimundo_Atizapan_Plaza_Cristal", label: "Atizapán Plaza Cristal"},
@@ -96,150 +435,10 @@
         {value: "Efectimundo_Zumpango_Plaza_Centro", label: "Zumpango Plaza Centro"}
     ];
 
-    async function handleAction(actionName) {
-        const statusLog = document.getElementById('statusLog');
-        const mainSelect = document.getElementById('mainSelect');
-        const sessionName = document.getElementById('sessionName').value;
-
-        if (!sessionName && actionName !== 'getSession') return alert("Selecciona una sucursal.");
-
-        statusLog.innerText = `>> ${actionName.toUpperCase()} en curso...`;
-
-        try {
-            const response = await fetch('waha-api-dash', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ "body": { "SendAction": actionName, "name_session": sessionName } })
-            });
-
-            const res = await response.json();
-            
-            if (actionName === 'restartSession') {
-                const status = res.status || (res.body && res.body.status);
-                if (status !== 'WORKING') {
-                    statusLog.innerText = `>> Sesión desconectada. Cargando QR...`;
-                    openModal();
-                    document.getElementById('modalSessionId').value = sessionName;
-                    prepareQRUI("Obteniendo código QR...");
-                    getQR(sessionName); 
-                    return; 
-                }
-            }
-
-            const sessions = res.getSession || (Array.isArray(res) && res[0]?.getSession);
-            if (sessions && Array.isArray(sessions)) {
-                mainSelect.innerHTML = '<option value="">--- Seleccionar Sucursal ---</option>';
-                const activeNames = sessions.map(s => s.name_session);
-                
-                sessions.forEach(s => {
-                    const icon = s.status === 'WORKING' ? '🟢' : '🔴';
-                    mainSelect.add(new Option(`${icon} ${s.name_session.replace(/_/g, ' ')}`, s.name_session));
-                });
-
-                filterModalOptions(activeNames);
-                statusLog.innerText = `>> Datos actualizados.`;
-                updateConnectionIndicator();
-            }
-        } catch (e) { 
-            statusLog.innerText = `>> Error de servidor.`; 
-        }
-    }
-
-    async function confirmStart() {
-        const val = document.getElementById('modalSessionId').value;
-        if (!val) return alert('Selecciona una sucursal');
-        
-        prepareQRUI("Creando sesión...");
-
-        try {
-            await fetch('waha-api-dash', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ "body": { "SendAction": "createSession", "name_session": val } })
-            });
-            setTimeout(() => getQR(val), 2000);
-        } catch (e) {
-            document.getElementById('qrContainer').innerHTML = `<div class="p-4 text-red-500 font-bold text-xs text-center">❌ Error</div>`;
-        }
-    }
-
-    async function getQR(sessionName) {
-        if (qrInterval) clearInterval(qrInterval);
-
-        qrInterval = setInterval(async () => {
-            const qrImage = document.getElementById('qrImage');
-            const qrStatusText = document.getElementById('qrStatusText');
-            const spinner = qrImage ? qrImage.previousElementSibling : null;
-
-            try {
-                const response = await fetch('waha-api-dash', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ "body": { "SendAction": "getQR", "name_session": sessionName } })
-                });
-                
-                const resData = await response.json();
-                const qrObj = resData.getQR || (Array.isArray(resData) ? resData[0]?.getQR : resData);
-
-                if (qrObj && qrObj.data && qrImage) {
-                    const mime = qrObj.mimetype || 'image/png';
-                    qrImage.src = `data:${mime};base64,${qrObj.data}`;
-                    qrImage.classList.remove('hidden');
-                    qrStatusText.innerText = "ESCANEA EL CÓDIGO QR";
-                    if (spinner) spinner.classList.add('hidden');
-                }
-                
-                if (qrObj && qrObj.status === 'WORKING') {
-                    clearInterval(qrInterval);
-                    qrStatusText.innerText = "¡CONECTADO!";
-                    setTimeout(() => { 
-                        closeModal(); 
-                        handleAction('getSession'); 
-                    }, 3000);
-                }
-            } catch (e) { 
-                console.error("Error QR:", e); 
-            }
-        }, 20000);
-    }
-
-    function prepareQRUI(text) {
-        document.getElementById('modalForm').classList.add('hidden');
-        document.getElementById('btnIniciarSesion').classList.add('hidden');
-        const container = document.getElementById('qrContainer');
-        container.classList.remove('hidden');
-        container.innerHTML = `
-            <div class="flex flex-col items-center justify-center">
-                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500 mb-4"></div>
-                <p id="qrStatusText" class="text-black text-[10px] font-bold uppercase text-center">${text}</p>
-                <img id="qrImage" src="" alt="QR" class="w-48 h-48 hidden mt-2">
-            </div>
-        `;
-    }
-
-    function filterModalOptions(activeNames) {
-        const modalSelect = document.getElementById('modalSessionId');
-        modalSelect.innerHTML = '<option value="">--- Seleccionar ---</option>';
-        allBranches.filter(b => !activeNames.includes(b.value))
-            .sort((a,b) => a.label.localeCompare(b.label))
-            .forEach(b => modalSelect.add(new Option(b.label, b.value)));
-    }
-
-    function updateConnectionIndicator() {
-        const sel = document.getElementById('mainSelect');
-        const indicator = document.getElementById('connectionStatus');
-        const isWorking = sel.options[sel.selectedIndex]?.text.includes('🟢');
-        indicator.className = isWorking ? "w-2.5 h-2.5 bg-green-500 rounded-full shadow-[0_0_8px_#22c55e]" : "w-2.5 h-2.5 bg-red-500 rounded-full";
-    }
-
-    function openModal() { document.getElementById('modal').classList.replace('hidden', 'flex'); }
-    
-    function closeModal() {
-        if (qrInterval) { clearInterval(qrInterval); qrInterval = null; }
-        document.getElementById('modal').classList.replace('flex', 'hidden');
-        document.getElementById('qrContainer').classList.add('hidden');
-        document.getElementById('modalForm').classList.remove('hidden');
-        document.getElementById('btnIniciarSesion').classList.remove('hidden');
-    }
+    const modalSelect = document.getElementById('modalSessionId');
+    modalSelect.innerHTML = '<option value="">--- Seleccionar ---</option>';
+    allBranches.sort((a,b) => a.label.localeCompare(b.label)).forEach(b => {
+        modalSelect.add(new Option(b.label, b.value));
+    });
 
     window.onload = () => handleAction('getSession');
