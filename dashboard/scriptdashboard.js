@@ -79,7 +79,7 @@
                 setTimeout(() => {
                     handleAction('getSession');
                     closeModal();
-                }, 5000);
+                }, 3000);
                 return;
             }
 
