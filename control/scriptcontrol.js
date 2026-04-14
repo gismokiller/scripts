@@ -64,10 +64,11 @@
                 })
             });
 
+            if (!response.ok) throw new Error(`Error: ${response.status}`);
+            
             const data = await response.json();
             const resData = data.body || data;
 
-            // Caso: Sesión ya vinculada (Éxito total)
             if (resData.mensaje === "La sesión ha sido creada correctamente o el tiempo para escanear tu código QR ha expirado" || resData.status === "WORKING") {
                 if (qrInterval) { clearInterval(qrInterval); qrInterval = null; }
                 qrContainer.innerHTML = `
@@ -83,7 +84,6 @@
                 return;
             }
 
-            // Caso: Mostrar imagen Base64 del QR
             let qrBase64 = resData.data || (Array.isArray(resData) && resData[0]?.data);
             if (qrBase64) {
                 const qrImage = document.getElementById('qrImage');
@@ -91,7 +91,6 @@
                     qrImage.src = `data:image/png;base64,${qrBase64}`;
                     qrImage.classList.remove('hidden');
                     
-                    // Quitar spinner si existe
                     const loader = qrContainer.querySelector('.animate-spin');
                     if (loader) loader.remove();
                     
@@ -318,13 +317,19 @@
             : "w-2.5 h-2.5 bg-red-500 rounded-full";
     }
 
-    function showView(viewName) {
+function showView(viewName) {
         document.querySelectorAll('.view-content').forEach(v => v.classList.remove('active'));
-        document.getElementById(`view-${viewName}`).classList.add('active');
-        document.getElementById('navTitle').innerText = viewName === 'profile' ? 'GESTOR DE PERFIL' : 'EFECTIMUNDO';
+        const target = document.getElementById(`view-${viewName}`);
+        if(target) target.classList.add('active');
+        
+        const titles = { 'home': 'EFECTIMUNDO', 'profile': 'GESTOR DE PERFIL', 'groups': 'GESTOR DE GRUPOS', 'groupssellers': 'GRUPOS DE VENTAS' };
+        document.getElementById('navTitle').innerText = titles[viewName] || 'EFECTIMUNDO';
+        
         if(viewName === 'home') document.getElementById('statusLog').classList.add('hidden');
+        if(viewName === 'groups') resetGroupsView();
+        if(viewName === 'groupssellers') resetGroupsSellerView();
         window.scrollTo({top: 0, behavior: 'smooth'});
-    }
+      }
 
     function openModal() { document.getElementById('modal').classList.replace('hidden', 'flex'); }
 
@@ -337,6 +342,380 @@
         document.getElementById('modalSessionId').classList.remove('hidden');
         document.getElementById('btnIniciarSesion').classList.remove('hidden');
     }
+    
+    function openImageModal(groupName, sessionName, imageUrl, groupId) {
+        document.getElementById('modalImageGroupName').textContent = groupName;
+        document.getElementById('modalImageSessionName').textContent = sessionName;
+        document.getElementById('modalImageContent').src = imageUrl || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%23333" width="100" height="100"/><text x="50" y="55" text-anchor="middle" fill="%23666" font-size="14">Sin imagen</text></svg>';
+        document.getElementById('modalImageGroupId').textContent = groupId;
+        document.getElementById('modalImageView').classList.replace('hidden', 'flex');
+    }
+    
+    function closeImageModal() {
+        document.getElementById('modalImageView').classList.replace('flex', 'hidden');
+    }
+    
+     async function fetchGroupsAction() {
+  const sessionName = document.getElementById('sessionName').value;
+  if (!sessionName) return alert("Selecciona una sucursal primero.");
+  
+  const btn = document.getElementById('btnFetchGroupsMap');
+  const statusLog = document.getElementById('statusLog');
+  const container = document.getElementById('groupsMapContainer');
+  const dropdown = document.getElementById('groupsMapDropdown');
+  const label = document.getElementById('displayMapSessionName');
+
+  btn.classList.add('animate-pulse', 'opacity-50');
+  statusLog.innerText = ">> Obteniendo grupos...";
+
+  try {
+    const response = await fetch('./waha-api', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        "body": { "SendAction": "getGroups", "name_session": sessionName }
+      })
+    });
+
+    if (!response.ok) throw new Error(`Error del servidor: ${response.status}`);
+    
+    const data = await response.json();
+    const resultData = Array.isArray(data) ? data[0] : data;
+    const dynamicKey = Object.keys(resultData)[0];
+    const rawItems = resultData[dynamicKey];
+
+    if (rawItems && Array.isArray(rawItems)) {
+      const validGroups = rawItems.filter(item => item.id_chatgroup && !item.error);
+
+      label.innerText = dynamicKey.replaceAll('_', ' ');
+      dropdown.innerHTML = '';
+
+      validGroups.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id_chatgroup;
+        opt.text = g.name_group || `Sin nombre (${g.id_chatgroup.substring(0, 15)}...)`;
+        dropdown.appendChild(opt);
+      });
+
+      container.classList.remove('hidden');
+      statusLog.innerText = `>> Se cargaron ${validGroups.length} grupos exitosamente.`;
+    }
+  } catch (e) {
+    console.error("Error en fetchGroups:", e);
+    statusLog.innerText = ">> Error al conectar con el servidor.";
+  } finally {
+    btn.classList.remove('animate-pulse', 'opacity-50');
+  }
+}
+
+      async function saveGroupToDatabase() {
+        const dropdown = document.getElementById('groupsMapDropdown');
+        if (!dropdown || !dropdown.value) return alert("Selecciona un grupo primero.");
+        
+        const groupId = dropdown.value;
+        const groupName = dropdown.options[dropdown.selectedIndex].text;
+        const sessionName = document.getElementById('sessionName').value;
+
+        const statusLog = document.getElementById('statusLog');
+        statusLog.innerText = `>> Guardando ${groupName}...`;
+
+        try {
+          const response = await fetch('./waha-api', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              "body": { 
+                "SendAction": "saveGroup", 
+                "name_session": sessionName,
+                "id_chatgroup": groupId,
+                "name_group": groupName
+              }
+            })
+          });
+          statusLog.innerText = "✅ Grupo guardado en base de datos.";
+        } catch (e) {
+          statusLog.innerText = "❌ Error al guardar en base.";
+        }
+      }
+
+function resetGroupsSellerView() {
+    const container = document.getElementById('groupsSellerContainer');
+    const dropdown = document.getElementById('groupsSellerDropdown');
+    const sessionLabel = document.getElementById('displaySellerSessionName');
+    const statusLog = document.getElementById('statusLog');
+
+    if (container) container.classList.add('hidden');
+    if (dropdown) dropdown.innerHTML = '';
+    if (sessionLabel) sessionLabel.innerText = '';
+    if (statusLog) statusLog.innerText = "Esperando comando...";
+}
+     
+/**
+ * Obtiene todos los grupos guardados en la base de datos sin filtrar por sesión
+ * y construye una tabla de administración global.
+ */
+async function fetchGroupshellin() {
+    const sessionName = document.getElementById('sessionName').value;
+    if (!sessionName) return alert("Selecciona una sucursal primero.");
+    
+    const btn = document.getElementById('btnFetchGroupsSeller');
+    const container = document.getElementById('groupsSellerContainer');
+    const statusLog = document.getElementById('statusLog');
+
+    if (btn) btn.classList.add('animate-pulse', 'opacity-50');
+    if (statusLog) statusLog.innerText = ">> Consultando registros en base de datos...";
+
+    try {
+        const response = await fetch('./waha-api', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                "body": { 
+                    "SendAction": "getAllSavedGroups",
+                    "name_session": sessionName
+                } 
+            })
+        });
+
+        if (!response.ok) throw new Error(`Error en servidor: ${response.status}`);
+
+        const rawText = await response.text();
+        console.log("Respuesta cruda:", rawText);
+        if (!rawText) throw new Error("Respuesta vacía del servidor");
+        const data = JSON.parse(rawText);
+
+        const groups = data.allgroupssellin || [];
+
+        if (groups.length === 0) {
+            if (statusLog) statusLog.innerText = ">> No se encontraron datos.";
+            return;
+        }
+
+        renderFullAdminTable(groups);
+        
+        if (container) container.classList.remove('hidden');
+        if (statusLog) statusLog.innerText = `>> ${groups.length} registros cargados exitosamente.`;
+
+    } catch (error) {
+        console.error("Error detallado:", error);
+        if (statusLog) statusLog.innerText = ">> Error al conectar con la BD.";
+    } finally {
+        if (btn) btn.classList.remove('animate-pulse', 'opacity-50');
+    }
+}
+
+/**
+ * Genera el HTML de la tabla con los datos de la base de datos
+ * @param {Array} groups - Lista de grupos obtenida del backend
+ */
+function renderFullAdminTable(groups) {
+    const container = document.getElementById('groupsSellerContainer');
+    
+    let html = `
+    <div class="space-y-4">
+        <h4 class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest text-center">Panel de Control Global</h4>
+        <div class="overflow-x-auto border border-zinc-800 rounded-2xl bg-zinc-950/50">
+            <table class="w-full text-left text-[11px] border-separate border-spacing-0">
+                <thead class="bg-zinc-900 text-zinc-500 sticky top-0">
+                    <tr>
+                        <th class="p-4 font-bold border-b border-zinc-800">Sucursal / Red</th>
+                        <th class="p-4 font-bold border-b border-zinc-800">Grupo de Ventas</th>
+                        <th class="p-4 font-bold border-b border-zinc-800 text-center">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-zinc-800">`;
+
+    groups.forEach((g, index) => {
+        const safeGroupName = (g.nombre_gupo_ventas || 'Sin nombre').replace(/'/g, "\\'");
+        const safeSessionName = (g.Nombre_session || '').replace(/_/g, ' ').replace(/'/g, "\\'");
+        html += `
+        <tr class="group-row hover:bg-zinc-900/40 transition-colors cursor-pointer" data-group-id="${g.id_chat_group}" onclick="openImageModal('${safeGroupName}', '${safeSessionName}', '${g.url_image_actual || ''}', '${g.id_chat_group}')">
+            <td class="p-4">
+                <div class="text-green-500 font-bold mb-0.5">${g.Nombre_session}</div>
+                <div class="text-zinc-500 text-[9px] italic">${g.Nombre_red || 'Sin red'}</div>
+            </td>
+            <td class="p-4">
+                <div class="flex items-center gap-3">
+                    <img src="${g.url_image_actual || ''}" alt="" class="group-photo w-10 h-10 rounded-full object-cover border border-zinc-700" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 40%22><rect fill=%22%23333%22 width=%2240%22 height=%2240%22 rx=%228%22/><text x=%2250%25%22 y=%2255%25%22 text-anchor=%22middle%22 fill=%22%23666%22 font-size=%2212%22>👥</text></svg>'">
+                    <div>
+                        <div class="group-name text-white font-medium">${g.nombre_gupo_ventas || 'Sin nombre'}</div>
+                        <span class="text-[9px] text-zinc-600 font-mono truncate max-w-[120px] inline-block">${g.id_chat_group}</span>
+                    </div>
+                </div>
+            </td>
+            <td class="p-4" onclick="event.stopPropagation()">
+                <div class="flex justify-center gap-2">
+                    <button onclick="actionUpdateName('${g.id_chat_group}', '${g.Nombre_session}', this.closest('tr'))" 
+                            class="p-2 bg-zinc-900 text-blue-400 rounded-xl hover:bg-blue-600 hover:text-white transition-all shadow-lg border border-zinc-800"
+                            title="Cambiar Nombre">
+                        📝
+                    </button>
+                    <button onclick="actionUpdatePhoto('${g.id_chat_group}', '${g.Nombre_session}', '${g.url_image_actual || ''}', this.closest('tr'))" 
+                            class="p-2 bg-zinc-900 text-purple-400 rounded-xl hover:bg-purple-600 hover:text-white transition-all shadow-lg border border-zinc-800"
+                            title="Cambiar Foto">
+                        🖼️
+                    </button>
+                </div>
+            </td>
+        </tr>`;
+    });
+
+    html += `
+                </tbody>
+            </table>
+        </div>
+    </div>`;
+
+    container.innerHTML = html;
+}
+
+async function actionUpdateName(groupId, session, rowElement) {
+    const currentName = rowElement.querySelector('.group-name')?.textContent || '';
+    const newName = prompt(`Escribe el nuevo nombre para el grupo:`, currentName);
+    
+    if (newName && newName.trim() !== "" && newName !== currentName) {
+        const statusLog = document.getElementById('statusLog');
+        statusLog.innerText = `>> Actualizando nombre del grupo...`;
+        
+        try {
+            const response = await fetch('./waha-api', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    "body": { 
+                        "SendAction": "setGroupName", 
+                        "name_session": session,
+                        "id_chat_group": groupId,
+                        "new_group_name": newName.trim()
+                    }
+                })
+            });
+
+            const data = await response.json();
+            const success = data.body?.success || data.success || data.mensaje?.includes('éxito') || data.mensaje?.includes('correctamente');
+            
+            if (success) {
+                const nameEl = rowElement.querySelector('.group-name');
+                if (nameEl) nameEl.textContent = newName.trim();
+                statusLog.innerText = `✅ Nombre del grupo actualizado a "${newName}"`;
+            } else {
+                statusLog.innerText = `❌ Error: ${data.body?.mensaje || data.mensaje || 'No se pudo actualizar'}`;
+            }
+        } catch (e) {
+            console.error("Error:", e);
+            statusLog.innerText = `❌ Error de conexión al actualizar nombre`;
+        }
+    }
+}
+
+async function actionUpdatePhoto(groupId, session, currentUrl, rowElement) {
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/jpeg, image/png';
+    
+    const statusLog = document.getElementById('statusLog');
+
+    fileInput.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        statusLog.classList.remove('hidden');
+        statusLog.innerHTML = `<div class="p-2 animate-pulse text-blue-400">⏳ Subiendo imagen...</div>`;
+
+        const formData = new FormData();
+        formData.append('data0', file);
+        formData.append('name_session', session);
+
+        try {
+            const uploadResponse = await fetch('./upload-imagen', { method: 'POST', body: formData });
+            const uploadResult = await uploadResponse.json();
+            const imageUrl = Array.isArray(uploadResult) ? uploadResult[0].secure_url : uploadResult.secure_url;
+
+            if (!imageUrl) {
+                statusLog.innerHTML = `<div class="p-2 text-red-400">❌ Error al subir imagen</div>`;
+                return;
+            }
+
+            const safeGroupId = groupId.replace(/'/g, "\\'");
+            const previewHtml = `
+                <div class="bg-purple-500/10 border border-purple-500/50 p-4 rounded-2xl mt-2 space-y-3">
+                    <p class="text-purple-400 font-bold text-[10px] mb-2 text-center">📸 NUEVA IMAGEN</p>
+                    <div class="flex justify-center mb-2">
+                        <img src="${imageUrl}" class="w-20 h-20 object-cover rounded-xl border border-zinc-700">
+                    </div>
+                    <input type="text" readonly value="${imageUrl}" id="newGroupImageUrl" class="w-full bg-black/40 p-2 rounded-xl text-[10px] outline-none text-zinc-500 mb-2">
+                    <div class="grid grid-cols-1 gap-2">
+                        <button id="btnConfirmPhoto" class="w-full bg-green-600 text-white p-3 rounded-xl text-[10px] font-bold transition active:scale-95">
+                            ✅ CONFIRMAR CAMBIO DE FOTO
+                        </button>
+                        <button id="btnCancelPhoto" class="w-full bg-zinc-700 text-white p-3 rounded-xl text-[10px] font-bold transition active:scale-95">
+                            ❌ CANCELAR
+                        </button>
+                    </div>
+                </div>`;
+            
+            statusLog.innerHTML = previewHtml;
+            
+            document.getElementById('btnConfirmPhoto').addEventListener('click', () => {
+                confirmGroupPhotoUpdate(groupId, session, imageUrl, rowElement);
+            });
+            
+            document.getElementById('btnCancelPhoto').addEventListener('click', () => {
+                statusLog.innerHTML = 'Esperando comando...';
+                statusLog.classList.add('hidden');
+            });
+
+        } catch (err) { 
+            console.error("Error upload:", err);
+            statusLog.innerHTML = `<div class="p-2 text-red-400">❌ Error al subir imagen</div>`; 
+        }
+    };
+    fileInput.click();
+}
+
+async function confirmGroupPhotoUpdate(groupId, session, imageUrl, rowElement) {
+    const statusLog = document.getElementById('statusLog');
+    statusLog.innerText = `>> Actualizando foto del grupo...`;
+
+    try {
+        const response = await fetch('./waha-api', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                "body": { 
+                    "SendAction": "setGroupPhoto", 
+                    "name_session": session,
+                    "id_chat_group": groupId,
+                    "new_photo_url": imageUrl
+                }
+            })
+        });
+
+        const rawText = await response.text();
+        console.log("Respuesta setGroupPhoto:", rawText);
+        
+        if (!rawText || !response.ok) {
+            statusLog.innerText = `❌ Error del servidor: ${response.status}`;
+            return;
+        }
+        
+        const data = JSON.parse(rawText);
+        const success = data.body?.success || data.success || data.mensaje?.includes('éxito') || data.mensaje?.includes('correctamente');
+        
+        if (success) {
+            if (rowElement) {
+                const imgEl = rowElement.querySelector('.group-photo');
+                if (imgEl) imgEl.src = imageUrl;
+            }
+            statusLog.innerHTML = `<div class="p-2 text-green-400">✅ Foto del grupo actualizada correctamente</div>`;
+        } else {
+            statusLog.innerText = `❌ Error: ${data.body?.mensaje || data.mensaje || 'No se pudo actualizar'}`;
+        }
+    } catch (e) {
+        console.error("Error:", e);
+        statusLog.innerText = `❌ Error de conexión al actualizar foto`;
+    }
+}
 
     // --- 6. INICIALIZACIÓN DE SUCURSALES ---
     const allBranches = [
