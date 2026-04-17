@@ -93,7 +93,8 @@
         {value: "Efectimundo_Valle_de_Chalco", label: "Valle de Chalco"},
         {value: "Efectimundo_Villas_de_las_Flores", label: "Villas Flores"},
         {value: "Efectimundo_Zinacantepec_Toluca", label: "Zinacantepec Toluca"},
-        {value: "Efectimundo_Zumpango_Plaza_Centro", label: "Zumpango Plaza Centro"}
+        {value: "Efectimundo_Zumpango_Plaza_Centro", label: "Zumpango Plaza Centro"},
+        {value: "Efectimundo_Plaza_Tizara", label: "Plaza Tizara"}
     ];
 
     async function handleAction(actionName) {
