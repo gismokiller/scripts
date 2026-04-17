@@ -30,7 +30,7 @@
         {value: "Efectimundo_Galerias_Chalco", label: "Galerías Chalco"},
         {value: "Efectimundo_Gran_Patio_Ecatepec", label: "Gran Patio Ecatepec"},
         {value: "Efectimundo_Gran_Patio_Valle_de_Chalco", label: "Gran Patio Valle Chalco"},
-        {value: "Efectimundo_Héroes_Chalco", label: "Héroes Chalco"},
+        {value: "Efectimundo_Heroes_Chalco", label: "Héroes Chalco"},
         {value: "Efectimundo_Héroes_Ixtapaluca", label: "Héroes Ixtapaluca"},
         {value: "Efectimundo_Héroes_Tecamac_1_Seccion", label: "Héroes Tecámac 1"},
         {value: "Efectimundo_Heroes_Tizayuca", label: "Héroes Tizayuca"},
